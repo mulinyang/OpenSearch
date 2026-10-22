@@ -64,28 +64,37 @@ public class ClusterDescribeSettingsResponse extends ActionResponse implements T
         private final boolean dynamic;
         @Nullable
         private final String defaultValue;
+        @Nullable
+        private final SettingBounds validation;
 
         /**
          * @param dynamic      whether the setting can be updated on a running cluster
          * @param defaultValue the declared default in its string form, or {@code null} when none should be reported
+         * @param validation   the declared bounds, or {@code null} when the setting declares none
          */
-        private SettingMetadata(boolean dynamic, @Nullable String defaultValue) {
+        private SettingMetadata(boolean dynamic, @Nullable String defaultValue, @Nullable SettingBounds validation) {
             this.dynamic = dynamic;
             this.defaultValue = defaultValue;
+            this.validation = validation;
         }
 
         /** Metadata for a setting whose default is not reported. */
         public static SettingMetadata withoutDefault(boolean dynamic) {
-            return new SettingMetadata(dynamic, null);
+            return new SettingMetadata(dynamic, null, null);
         }
 
         /** Metadata for a setting with a declared default. */
         public static SettingMetadata withDefault(boolean dynamic, String defaultValue) {
-            return new SettingMetadata(dynamic, Objects.requireNonNull(defaultValue, "defaultValue"));
+            return new SettingMetadata(dynamic, Objects.requireNonNull(defaultValue, "defaultValue"), null);
+        }
+
+        /** Returns a copy of this metadata carrying the given declared bounds; {@code null} leaves {@code validation} unset. */
+        public SettingMetadata withValidation(@Nullable SettingBounds validation) {
+            return new SettingMetadata(dynamic, defaultValue, validation);
         }
 
         public SettingMetadata(StreamInput in) throws IOException {
-            this(in.readBoolean(), in.readOptionalString());
+            this(in.readBoolean(), in.readOptionalString(), in.readOptionalWriteable(SettingBounds::new));
         }
 
         public boolean dynamic() {
@@ -97,10 +106,16 @@ public class ClusterDescribeSettingsResponse extends ActionResponse implements T
             return defaultValue;
         }
 
+        @Nullable
+        public SettingBounds validation() {
+            return validation;
+        }
+
         @Override
         public void writeTo(StreamOutput out) throws IOException {
             out.writeBoolean(dynamic);
             out.writeOptionalString(defaultValue);
+            out.writeOptionalWriteable(validation);
         }
 
         @Override
@@ -108,6 +123,10 @@ public class ClusterDescribeSettingsResponse extends ActionResponse implements T
             builder.startObject().field("dynamic", dynamic);
             if (defaultValue != null) {
                 builder.field("default", defaultValue);
+            }
+            if (validation != null) {
+                builder.field("validation");
+                validation.toXContent(builder, params);
             }
             return builder.endObject();
         }
@@ -117,17 +136,110 @@ public class ClusterDescribeSettingsResponse extends ActionResponse implements T
             if (this == o) return true;
             if (o == null || getClass() != o.getClass()) return false;
             SettingMetadata that = (SettingMetadata) o;
-            return dynamic == that.dynamic && Objects.equals(defaultValue, that.defaultValue);
+            return dynamic == that.dynamic
+                && Objects.equals(defaultValue, that.defaultValue)
+                && Objects.equals(validation, that.validation);
         }
 
         @Override
         public int hashCode() {
-            return Objects.hash(dynamic, defaultValue);
+            return Objects.hash(dynamic, defaultValue, validation);
         }
 
         @Override
         public String toString() {
-            return "SettingMetadata{dynamic=" + dynamic + ", default=" + defaultValue + "}";
+            return "SettingMetadata{dynamic=" + dynamic + ", default=" + defaultValue + ", validation=" + validation + "}";
+        }
+    }
+
+    /**
+     * Declared constraints of a single registered setting: the value type, and the inclusive minimum and maximum when the
+     * setting declares them. Exists only to marshal this response; it is derived from, not stored on,
+     * {@link org.opensearch.common.settings.Setting}.
+     * @opensearch.internal
+     */
+    public static final class SettingBounds implements Writeable, ToXContentObject {
+        private final String type;
+        @Nullable
+        private final String min;
+        @Nullable
+        private final String max;
+
+        private SettingBounds(String type, @Nullable String min, @Nullable String max) {
+            this.type = Objects.requireNonNull(type, "type");
+            this.min = min;
+            this.max = max;
+        }
+
+        /**
+         * Constraints for a setting whose value type is known.
+         *
+         * @param type the value type, for example {@code integer}, {@code boolean} or {@code byte_size}
+         * @param min  the inclusive lower bound in its string form, or {@code null} when none is declared
+         * @param max  the inclusive upper bound in its string form, or {@code null} when none is declared
+         */
+        public static SettingBounds of(String type, @Nullable String min, @Nullable String max) {
+            return new SettingBounds(type, min, max);
+        }
+
+        /** Constraints for a setting whose value type is known but which declares no bounds. */
+        public static SettingBounds ofType(String type) {
+            return new SettingBounds(type, null, null);
+        }
+
+        public SettingBounds(StreamInput in) throws IOException {
+            this(in.readString(), in.readOptionalString(), in.readOptionalString());
+        }
+
+        public String type() {
+            return type;
+        }
+
+        @Nullable
+        public String min() {
+            return min;
+        }
+
+        @Nullable
+        public String max() {
+            return max;
+        }
+
+        @Override
+        public void writeTo(StreamOutput out) throws IOException {
+            out.writeString(type);
+            out.writeOptionalString(min);
+            out.writeOptionalString(max);
+        }
+
+        @Override
+        public XContentBuilder toXContent(XContentBuilder builder, Params params) throws IOException {
+            builder.startObject().field("type", type);
+            if (min != null) {
+                builder.field("min", min);
+            }
+            if (max != null) {
+                builder.field("max", max);
+            }
+            return builder.endObject();
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) return true;
+            if (o == null || getClass() != o.getClass()) return false;
+            SettingBounds that = (SettingBounds) o;
+            return type.equals(that.type) && Objects.equals(min, that.min) && Objects.equals(max, that.max);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(type, min, max);
+        }
+
+        @Override
+        public String toString() {
+            return "SettingBounds{type=" + type + ", min=" + min + ", max=" + max + "}";
         }
     }
 }
